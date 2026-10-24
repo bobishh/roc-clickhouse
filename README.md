@@ -12,8 +12,8 @@ transport/server errors. The application supplies bounded HTTP effects.
 - Tested transport: `basic-webserver` 0.18.0.
 - Integration tests: ClickHouse 26.8.11.7 on Linux; Roc apps on Linux and macOS ARM64.
 
-Other compiler, platform and HTTP package versions require verification. Roc's
-nominal HTTP types must come from the same package URL in the client and transport.
+Other compiler, platform and HTTP package versions require verification. Use
+`roc-lang/http` 2.0.0 for your application's shared `http` dependency.
 
 Use `roc build --opt=dev` or `roc --opt=dev` explicitly. This nightly's LLVM
 backend crashed during LIR generation for the integration application; the dev
