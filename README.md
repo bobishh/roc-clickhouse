@@ -6,13 +6,18 @@ transport/server errors. The application supplies bounded HTTP effects.
 
 ## Compatibility
 
-- Roc: `nightly-2026-09-23-c7852fd` (new Zig compiler).
-- Shared HTTP types: `roc-lang/http` 1.0.0.
-- Tested transport: `basic-webserver` 0.16.0.
+- Roc: `nightly-2026-10-23-18478ff` (Zig-based compiler).
+- Native build backend: `--opt=dev`.
+- Shared HTTP types: `roc-lang/http` 2.0.0.
+- Tested transport: `basic-webserver` 0.18.0.
 - Integration tests: ClickHouse 26.8.11.7 on Linux; Roc apps on Linux and macOS ARM64.
 
 Other compiler, platform and HTTP package versions require verification. Roc's
 nominal HTTP types must come from the same package URL in the client and transport.
+
+Use `roc build --opt=dev` or `roc --opt=dev` explicitly. This nightly's LLVM
+backend crashed during LIR generation for the integration application; the dev
+backend produces native binaries and is the verified path used by this package.
 
 ## Usage
 
@@ -22,7 +27,7 @@ to your app header under the name `ch`. For a local checkout, use
 The [complete example](examples/server.roc) serves a read-only query on loopback.
 
 ```roc
-ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.1.0/6Mpcsn1m2d6QC7GQ6jzY9m1UB8SfjJJ2iRWPYNyLCdVs.tar.zst",
+ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.2.0/6jYdZw18Gmbao28h6hXkKdKNwKqaicPqX8CqrwM2fiZU.tar.zst",
 ```
 
 ```roc

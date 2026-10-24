@@ -48,7 +48,7 @@ async function ready(url, child) {
 
 try {
   const replacement = process.env.ROC_CLICKHOUSE_PACKAGE ? ['--replace-dep', path.join(root, 'package/main.roc'), process.env.ROC_CLICKHOUSE_PACKAGE] : [];
-  const build = spawnSync(roc, ['build', 'tests/server.roc', `--output=${binary}`, ...replacement], { cwd: root, encoding: 'utf8' });
+  const build = spawnSync(roc, ['build', '--opt=dev', 'tests/server.roc', `--output=${binary}`, ...replacement], { cwd: root, encoding: 'utf8', timeout: 120_000 });
   await writeFile(path.join(work, 'build.log'), build.stdout + build.stderr);
   assert.ok([0, 2].includes(build.status), 'Roc build failed; see ' + path.join(work, 'build.log'));
   assert.ok((await readFile(binary)).length > 0, 'fresh compiled binary exists');
