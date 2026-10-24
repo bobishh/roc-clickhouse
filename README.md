@@ -22,6 +22,10 @@ to your app header under the name `ch`. For a local checkout, use
 The [complete example](examples/server.roc) serves a read-only query on loopback.
 
 ```roc
+ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.1.0/6Mpcsn1m2d6QC7GQ6jzY9m1UB8SfjJJ2iRWPYNyLCdVs.tar.zst",
+```
+
+```roc
 import pf.Http
 import http.Response
 import ch.Client
