@@ -27,7 +27,7 @@ to your app header under the name `ch`. For a local checkout, use
 The [complete example](examples/server.roc) serves a read-only query on loopback.
 
 ```roc
-ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.2.0/6jYdZw18Gmbao28h6hXkKdKNwKqaicPqX8CqrwM2fiZU.tar.zst",
+ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.0.1/6jYdZw18Gmbao28h6hXkKdKNwKqaicPqX8CqrwM2fiZU.tar.zst",
 ```
 
 ```roc
@@ -141,5 +141,5 @@ container. Set `ROC_CLICKHOUSE_WORK_DIR` to choose the build/log location;
 otherwise the runner's temporary directory is used.
 
 The GitHub workflow runs the same checks on Linux. Dispatch it with a `version`
-such as `0.1.0` to publish that exact verified bundle. Package URLs contain the
+such as `0.0.1` to publish that exact verified bundle. Package URLs contain the
 Roc content hash and are immutable.
