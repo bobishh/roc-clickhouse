@@ -1,0 +1,59 @@
+name: Verify and release
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (X.Y.Z); leave empty for verification only'
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install verified compiler
+        run: sh scripts/install-roc.sh "$RUNNER_TEMP/roc"
+      - name: Test the release bundle against disposable ClickHouse
+        id: check
+        env:
+          ROC: ${{ runner.temp }}/roc/roc
+        run: node scripts/check.mjs
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package
+          path: ${{ steps.check.outputs.bundle }}
+          compression-level: 0
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: diagnostics
+          path: ${{ runner.temp }}/roc-clickhouse-*/**/*.log
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.version != '' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: package
+          path: package
+      - name: Publish verified bundle
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          gh release create "$VERSION" package/*.tar.zst --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
