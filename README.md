@@ -1,145 +1,284 @@
 # roc-clickhouse
 
-A platform-independent ClickHouse HTTP client for Roc. Typed JSONEachRow
-encoding/decoding, query parameters, confirmed asynchronous inserts and explicit
-transport/server errors. The application supplies bounded HTTP effects.
+Typed SQL over ClickHouse HTTP for Roc. Native SQL, safe named parameters,
+record-driven decoding, lazy row streams and bounded insert batches. No ORM,
+query DSL, schema generation or compile-time SQL validation.
+
+The package supplies pure protocol/codec functions and effectful orchestration.
+The application supplies HTTP, TLS and optional gzip capabilities. It depends on
+shared `roc-lang/http` types, not a particular platform.
 
 ## Compatibility
 
-- Roc: `nightly-2026-10-23-18478ff` (Zig-based compiler).
+- Roc: `nightly-2026-11-04-2622062` (Zig-based compiler).
 - Native build backend: `--opt=dev`.
-- Shared HTTP types: `roc-lang/http` 2.0.0.
-- Tested transport: `basic-webserver` 0.18.0.
-- Integration tests: ClickHouse 26.8.11.7 on Linux; Roc apps on Linux and macOS ARM64.
+- Shared HTTP dependency: `roc-lang/http` 2.0.0.
+- Buffered transport example: `basic-webserver` 0.20.0.
+- Streaming transport example: `basic-cli` 0.26.0.
+- Integration server: ClickHouse 26.8.11.7.
+- CI: Linux x86-64. Local verification: macOS ARM64 with ClickHouse in Docker.
 
-Other compiler, platform and HTTP package versions require verification. Use
-`roc-lang/http` 2.0.0 for your application's shared `http` dependency.
+Use the pinned compiler and `--opt=dev`; other compiler/platform/backend versions
+require verification. Stream APIs require this newer toolchain. Existing
+applications should update their platform and keep the shared `http` dependency
+at 2.0.0 when upgrading from 0.0.1.
 
-Use `roc build --opt=dev` or `roc --opt=dev` explicitly. This nightly's LLVM
-backend crashed during LIR generation for the integration application; the dev
-backend produces native binaries and is the verified path used by this package.
+## Installation
 
-## Usage
-
-Add the immutable package URL from [Releases](https://github.com/bobishh/roc-clickhouse/releases)
-to your app header under the name `ch`. For a local checkout, use
-`ch: "../roc-clickhouse/package/main.roc"` (relative to your app).
-The [complete example](examples/server.roc) serves a read-only query on loopback.
+Use an immutable package URL from [Releases](https://github.com/bobishh/roc-clickhouse/releases)
+under `ch` in the app header, alongside your chosen platform and shared `http`
+dependency. For a checkout, use `ch: "../roc-clickhouse/package/main.roc"`.
+The release archive filename is Roc's content hash.
 
 ```roc
-ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.0.1/6jYdZw18Gmbao28h6hXkKdKNwKqaicPqX8CqrwM2fiZU.tar.zst",
+ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.1.0/B9U2fBwU1G3j4pAGW5Csphx4zfqsQgH6W3gKJvvF5wW8.tar.zst",
 ```
 
+See complete [webserver](examples/server.roc) and [streaming CLI](examples/stream.roc)
+examples. Both read credentials from application configuration; neither package
+code nor examples require a database schema lookup.
+
+## Typed queries
+
 ```roc
-import pf.Http
-import http.Response
 import ch.Client
-import ch.JsonEachRow
 
-config = {
-    ..Client.default_config,
-    endpoint: "https://clickhouse.example.test:8443",
-    database: "analytics",
-    username: "reader",
-    password: "load-from-private-configuration",
-}
-
-send_http! = |request, max_response_bytes|
-    Http.send_with!(request, Http.default_config.with_max_response_bytes(max_response_bytes))
-
-# Inside your handler or CLI entry point:
 statement = {
-    ..Client.query("SELECT id, text FROM events WHERE text={text:String} SETTINGS output_format_json_quote_64bit_integers=0 FORMAT JSONEachRow"),
-    parameters: [Client.string_parameter("text", "a value with 'quotes' and\nnewlines")],
+    ..Client.query("SELECT country, count() AS events FROM events WHERE country={country:String} GROUP BY country ORDER BY events DESC LIMIT 10"),
+    parameters: [Client.string_parameter("country", "DE")],
+    query_id: "country-report",
 }
-response = Client.send!(send_http!, config, statement)?
-rows : List({ id : U64, text : Str })
-rows = JsonEachRow.decode(Response.body(response))?
+rows : Try(List({ country : Str, events : U64 }), _)
+rows = Client.query!(send_http!, db, statement)
 ```
 
-For numeric parameters, pass their text representation directly:
-`parameters: [{ name: "id", value: "42" }]` with `{id:UInt64}` in SQL.
-`Client.string_parameter` handles ClickHouse's escaped-text String representation;
-URL percent encoding is applied separately by the client. Parameters bind values;
-the application owns SQL and identifier selection.
+`send_http!` receives `(Request, max_response_bytes)` and returns
+`Try(Response, transport_error)`. It must enforce the byte budget during
+reception, honor the request deadline, verify HTTPS certificates, and avoid
+implicit retries. The package wraps its original errors in `TransportError`.
+The CLI example implements this with `Http.send_streaming!` followed by bounded
+`read_to_end!`; the webserver uses bounded `Http.send_with!`.
 
-For insertion:
+The expected result type selects the JSON parser. No decoder callback or field
+extraction is needed. A missing required field, incompatible value, overflow or
+malformed row fails the entire buffered query, including any previously decoded
+rows. Empty results return `Ok([])`.
+
+Typed entry points set `default_format=JSONEachRow`, unquoted 64-bit integers,
+quoted decimals, simple date/time output and plain exception framing. Do not add `FORMAT` or conflicting
+output `SETTINGS` in typed SQL: explicit SQL clauses override HTTP defaults.
+Other per-query ClickHouse settings use `statement.settings`, a list of
+`{ name, value }`. Duplicate names and transport-owned settings are rejected.
+
+Parameters use native `{name:Type}` placeholders. String values need
+`Client.string_parameter`, which applies ClickHouse escaped-text rules before
+URL percent encoding. Other values use ClickHouse's text representation:
+`parameters: [{ name: "id", value: "42" }]` with `{id:UInt64}`. DateTime64
+parameters can use a validated timestamp's `.text`. SQL and identifier selection
+remain application-owned; parameter values are never interpolated into SQL.
+
+`Client.query` is a pure statement constructor. `Client.send!` remains the
+low-level raw-response operation; use `query!` for typed result guarantees.
+
+## Streaming
 
 ```roc
-body = JsonEachRow.encode([{ id: 42, text: "hello" }])?
-statement = {
-    ..Client.query("INSERT INTO events FORMAT JSONEachRow"),
-    body,
-    async_insert: True,
+result : Try(Stream(Try({ id : U64, text : Str }, _)), _)
+result = Client.stream!(open_http!, db, Client.query("SELECT id, text FROM events"), Client.default_stream_options)
+for! row in result? {
+    event = row?
+    process_event!(event)?
 }
-_ = Client.send!(send_http!, config, statement)?
 ```
 
-`async_insert: True` always sends both `async_insert=1` and
-`wait_for_async_insert=1`. A successful acknowledgement waits for the insertion.
-Timeouts and disconnects leave the write outcome unknown. No operation is retried
-automatically; deduplication and retry decisions belong to the application.
+`open_http!` receives a `Request` and returns:
 
-## API and errors
+```roc
+Ok({ status: response.status(), headers: response.headers(), chunks: response.chunks() })
+```
 
-`Client` owns connection configuration, query construction and response checking.
-`JsonEachRow` owns typed row encoding/decoding. Pure `Client.request` and
-`Client.check_response` can be used separately when an application owns transport.
+`chunks` is `Stream(Try(List(U8), transport_error))`. It must read lazily and
+release the connection when its last reference is released. A transport chunk
+must not exceed `max_chunk_bytes` (default 64 KiB). Default maximum encoded row
+size is 1 MiB, excluding LF but including a CR when present. No total result-size
+cap applies to streaming; the request deadline still applies to the entire
+exchange, including time spent processing rows.
+
+The decoder retains at most one chunk plus one incomplete row. It handles
+arbitrary chunk boundaries, split UTF-8, CRLF, blank lines and a final row without
+LF. It does not request the next chunk until needed. Releasing all references to
+an unfinished stream releases the transport. Streams are consumed once; copying
+a stream does not provide an independent network cursor.
+
+Opening failures use the outer `Try`. Failures after opening are stream items:
+`TransportError`, `InvalidUtf8`, `InvalidRow({ line, problem })`,
+`ClickHouseException({ line, code, message })`, `RowTooLarge({ line, limit })` or
+`ChunkTooLarge(limit)`. Line numbers include blank lines. An error is terminal and
+emitted once; subsequent source items are not read. Failed HTTP responses read
+at most one diagnostic chunk and retain at most 4096 diagnostic bytes.
+
+Streaming requests disable server response buffering (`wait_end_of_query=0`).
+Rows already delivered remain provisional until successful end of stream:
+ClickHouse can fail after returning rows. Processing side effects cannot be
+rolled back by this client. Stopping early also does not prove query success.
+Dropping an HTTP connection does not guarantee server cancellation; use a query
+ID and `cancel!` when server execution must stop.
+
+`JsonEachRow.stream(chunks, options)` exposes the same incremental decoder for
+applications that already own a transport. `JsonEachRow.decode` and `encode`
+remain pure buffered codec operations.
+
+## Scalar representations
+
+```roc
+import ch.Types
+
+Row : {
+    id : U64,
+    amount : Types.Decimal,
+    happened_at : Types.DateTime64,
+    day : Types.Date,
+    uuid : Types.Uuid,
+    note : Types.Nullable(Str),
+}
+```
+
+| ClickHouse value | Roc representation and contract |
+| --- | --- |
+| UInt64 / Int64 | Native `U64` / `I64` with typed query settings; exact bounds, no float intermediate. |
+| Quoted or unquoted 64-bit integers | `Types.UInt64` / `Types.Int64`; read `.value`, construct with `.from_value`. Overflow rejects. Encoding emits a JSON number. |
+| Decimal32/64/128/256 | `Types.Decimal`; exact fixed-point `.text`, up to 76 total significant integer digits plus fractional digits. No exponent, rounding or float conversion. Encoding emits a quoted decimal. |
+| Date / Date32 | `Types.Date`; Gregorian `YYYY-MM-DD` text with calendar validation. |
+| DateTime / DateTime64 | `Types.DateTime64`; `YYYY-MM-DD HH:MM:SS` with optional 1–9 fractional digits. Precision and timezone interpretation remain explicit in SQL/schema. |
+| UUID | `Types.Uuid`; canonical 36-character hyphenated hexadecimal text; preserves casing. |
+| Nullable(T) | `Types.Nullable(T)` aliases `Try(T, [Null])`: `Ok(value)` or `Err(Null)`. Field remains required; a missing column fails. |
+
+Text-backed types validate through `.from_str` and JSON parsing/encoding. For
+example, `Types.Decimal.from_str("123.4500")?` preserves trailing zeros. Validators
+check wire syntax; ClickHouse validates the target column's range, scale and
+timezone semantics. Date/time wrappers do not silently convert timezones.
+Arrays and nested records follow their Roc JSON shapes; other ClickHouse types
+need an explicit compatible Roc representation or custom scalar codec.
+
+## Inserts and batching
+
+```roc
+progress = Client.insert!(send_http!, db, ["analytics", "events"], events, {
+    ..Client.default_insert_options,
+    max_rows: 1000,
+    max_bytes: 1_048_576,
+    async_insert: True,
+    query_id: "import-2026-11-05",
+})?
+```
+
+`insert!` accepts a list. `insert_stream!` takes the same arguments with a lazy
+`Stream(Try(Event, source_error))` instead. Table names are a nonempty list of
+identifier parts; every part is quoted and escaped. An identifier containing a
+dot is one name, not implicit database qualification.
+
+Both helpers serialize one bounded JSONEachRow batch at a time. Row and byte
+limits must be positive; bytes include each row's LF. A single oversized encoded
+row fails. Serialization holds one row in addition to the current batch; source
+record size is application-owned. Row-count boundaries flush before pulling
+another source item. Byte boundaries require at most one encoded row of
+lookahead. Empty inputs make no HTTP request.
+
+Each batch is acknowledged before the next request. `async_insert: True` always
+sets both `async_insert=1` and `wait_for_async_insert=1`. Returned progress is
+`{ rows, batches }`, counting acknowledged work. A nonempty operation query ID
+becomes `query_id:0`, `query_id:1`, etc.; choose an ID unique to the logical run.
+Query IDs provide correlation, not insert deduplication.
+
+Failure is `InsertFailed({ confirmed: { rows, batches }, cause })`. Causes retain
+source, encoding, size, transport or server errors. Already confirmed batches
+remain inserted; pending rows are not retried. A timeout/disconnect can leave
+the current batch's outcome unknown. Retry and deduplication decisions belong
+to the application. Encoding failures, including non-finite floats, return errors
+rather than silently dropping rows.
+
+## Compression
+
+```roc
+import ch.Compression
+
+send_gzip! = |request, limit|
+    Compression.send!(gzip!, gunzip!, send_http!, request, limit)
+
+progress = Client.insert!(send_gzip!, db, ["events"], events, Client.default_insert_options)?
+```
+
+`Compression.send!` applies standard HTTP gzip to the request body and negotiates
+gzip responses. It composes with every buffered Client operation, including each
+insert batch. It uses `Content-Encoding`, `Accept-Encoding` and
+`enable_http_compression=1`, not ClickHouse's separate native compression format.
+
+The application supplies `gzip!(bytes) -> Try(bytes, error)` and
+`gunzip!(bytes, max_output_bytes) -> Try(bytes, error)`. Decompression must enforce
+the output budget while producing bytes; checking only after allocation cannot
+protect against compressed expansion. The underlying HTTP effect must bound the
+compressed response too. Codec failures remain `CompressionError` within the
+transport error; unknown response encodings reject explicitly.
+
+The integration client demonstrates bounded platform callbacks using `gzip`
+through `basic-cli`'s `Cmd`, with command deadlines and captured-output limits.
+Platforms can instead supply an in-process compression library. Streaming reads
+use identity encoding; a custom platform may decompress incrementally before
+supplying bounded decoded chunks. Do not feed compressed bytes to JSONEachRow.
+
+## Cancellation, deadlines and errors
+
+```roc
+statuses = Client.cancel!(send_http!, db, "country-report")?
+```
+
+`cancel!` sends `KILL QUERY WHERE query_id={id:String} SYNC` with a bound String
+parameter, returning records `{ kill_status, query_id }`. An absent query returns
+an empty list. Cancellation requires server permissions and targets the server
+at the configured endpoint; routing to the executing node remains the
+application's responsibility. It is an explicit effect, independent of stopping
+a consumer or encountering a local deadline.
 
 `Client.default_config` uses `http://127.0.0.1:8123`, database/user `default`, an
-empty password, an 8-second deadline and a 1 MiB response budget. Set production
-credentials explicitly. Endpoints can include a reverse-proxy path, with an
-optional trailing slash; userinfo, query strings and fragments are rejected.
-Set `query_id` on a statement when correlation is needed.
+empty password, an 8-second deadline and a 1 MiB buffered response budget. Set
+production credentials explicitly. Credentials use HTTP headers. Endpoints may
+include a reverse-proxy path; userinfo, query strings and fragments reject.
 
-`Client.send!` returns a shared HTTP `Response` or:
+Errors distinguish:
 
-- `InvalidConfig(field)` / `InvalidParameter(name)`: local request validation.
-- `TransportError(error)`: preserves the supplied transport's error value.
-- `ResponseTooLarge`: defensive check if a transport ignored the response budget.
-- `ClickHouseError({ status, code, message })`: failed HTTP status or a nonzero
-  `X-ClickHouse-Exception-Code` header. Diagnostic messages are at most 4096 bytes.
+- `InvalidConfig` / `InvalidParameter`: request validation before transport.
+- `TransportError(error)`: the transport's original failure, including limits,
+  deadlines and optional compression errors.
+- `HttpError({ status, code, message })`: non-success HTTP status without a
+  recognizable ClickHouse exception; `code` is empty.
+- `ClickHouseError({ status, code, message })`: server exception header/body or
+  a late exception detected by buffered typed decoding.
+- Row-decoding and stream-item errors described above.
+- `ResponseTooLarge`: defensive check if a transport violates its budget.
 
-The supplied HTTP function receives `(request, max_response_bytes)` and must
-enforce that limit while receiving, honor the request deadline, and provide TLS
-verification when HTTPS is used. A check after allocation cannot enforce a memory
-bound. `basic-webserver`'s `Http.send_with!` supplies these facilities. The client
-calls this function exactly once per operation.
-
-Requests use POST, credentials in headers and `wait_end_of_query=1`, with progress
-headers disabled. ClickHouse can still expose late execution errors through its
-HTTP response body under some server configurations. Always decode structured
-results: `JsonEachRow.decode` rejects the entire result on the first invalid row,
-including trailing exception text. An HTTP 200 alone is insufficient proof for
-arbitrary raw query results. See the [HTTP interface contract](https://clickhouse.com/docs/interfaces/http).
-
-`JsonEachRow.encode` returns `EncodeError(error)` on unsupported values, including
-non-finite floats. `decode` returns `InvalidUtf8` or
-`InvalidRow({ line, problem })`, where line is one-based and includes blank lines.
-Empty results and CRLF are accepted. Integer quoting, DateTime precision,
-Decimal, UUID and nullable representations follow the selected Roc record type
-and ClickHouse output settings; the library does not guess coercions.
-
-Server diagnostics and preserved transport errors may contain query data. Choose
-what to expose or log at the application boundary. Credentials are never added
-to query parameters by this library.
+Buffered requests ask for `wait_end_of_query=1`, disable progress headers and
+always decode typed results. An HTTP 200 alone is insufficient proof of success.
+Server/transport diagnostics can contain query data; choose what to log or expose
+at the application boundary. Diagnostics retained by this package are at most
+4096 bytes. See [ClickHouse HTTP behavior](https://clickhouse.com/docs/interfaces/http)
+and [cancellation](https://clickhouse.com/docs/sql-reference/statements/kill).
 
 ## Development and releases
 
-Install the compiler in `.roc-version`, Node.js 22 and Docker. Linux x86-64 and
-macOS ARM64 can use `sh scripts/install-roc.sh /path/to/roc` (archive SHA-256 is
-checked). Then run:
+Install Node.js 22, Docker and the compiler in `.roc-version`. Linux x86-64 and
+macOS ARM64 can use the SHA-256-verified installer:
 
 ```sh
+sh scripts/install-roc.sh /path/to/roc
 ROC=/path/to/roc/roc node scripts/check.mjs
 ```
 
-This checks formatting, types and expectations, bundles the package, and runs a
-compiled application against disposable authenticated ClickHouse using the
-downloaded bundle. Tests use unused loopback ports and remove only their own
-container. Set `ROC_CLICKHOUSE_WORK_DIR` to choose the build/log location;
-otherwise the runner's temporary directory is used.
+The check command verifies formatting, types, unit expectations and examples,
+then bundles the package and builds native integration apps against that exact
+bundle. Tests use disposable authenticated ClickHouse, unused loopback ports and
+isolated fault servers; cleanup targets only their own processes/container.
+Integration compression tests also require `gzip` on PATH.
 
-The GitHub workflow runs the same checks on Linux. Dispatch it with a `version`
-such as `0.0.1` to publish that exact verified bundle. Package URLs contain the
-Roc content hash and are immutable.
+Set `ROC_CLICKHOUSE_WORK_DIR` to choose a build/log location. The GitHub workflow
+runs the same checks on Linux. Dispatch with a semantic `version` to publish that
+verified immutable archive. No package operation retries automatically.

@@ -1,6 +1,7 @@
 // Given a disposable authenticated ClickHouse, When compiled Roc inserts and
 // queries, Then values survive and failures/limits remain explicit without retry.
 import assert from 'node:assert/strict';
+import { verifyTypedClient } from './typed-integration.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -115,6 +116,7 @@ try {
   mode = 'slow';
   assert.equal((await query({ sql: 'SELECT 1', endpoint, timeout_ms: 100 }, 503)).error, 'transport');
   assert.equal(requests, 4, 'every operation sends exactly once');
+  await verifyTypedClient({ root, work, roc, replacement, clickhouse, password });
   console.log('PASS: real ClickHouse authenticated insert/select, parameters, empty results, failures, limits and no retries.');
 } finally {
   if (app) {

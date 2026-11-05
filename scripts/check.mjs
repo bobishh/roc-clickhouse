@@ -29,6 +29,8 @@ assert.ok((await run(roc, ['version'], 'compiler')).includes(pin), 'install comp
 await run(roc, ['fmt', '--check', 'package', 'tests', 'examples'], 'format');
 await run(roc, ['check', 'package/main.roc'], 'types');
 await run(roc, ['check', 'examples/server.roc'], 'example');
+await run(roc, ['check', 'examples/stream.roc'], 'stream-example');
+await run(roc, ['check', 'tests/stream.roc'], 'stream-types');
 const tests = await run(roc, ['test', 'tests/client.roc'], 'unit');
 assert.match(tests, /All \([1-9][0-9]*\) tests passed/, 'expectations execute and pass');
 

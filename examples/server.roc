@@ -1,7 +1,7 @@
 app [Context, program] {
 	ch: "../package/main.roc",
 	http: "https://github.com/roc-lang/http/releases/download/2.0.0/6ZUwqYhCS8PU9Mo6MF7oV82ET2o7KYb57CLKDq4cq4sS.tar.zst",
-	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.18.0/9VgbC77zLmYYgxLpiNGCq3eySyRCbE2RriAM4sjr2y81.tar.zst",
+	pf: platform "https://github.com/roc-lang/basic-webserver/releases/download/0.20.0/7dR2ewuEbpPQXTAZL3aH62weBwpNNjbCJtyyiRsufTNZ.tar.zst",
 }
 
 import pf.Env
@@ -9,7 +9,6 @@ import pf.Http
 import pf.Server
 import http.Response
 import ch.Client
-import ch.JsonEachRow
 
 # Run with CLICKHOUSE_URL, CLICKHOUSE_USER and CLICKHOUSE_PASSWORD set.
 # GET http://127.0.0.1:8000/ performs a read-only query.
@@ -26,19 +25,13 @@ init! = || {
 
 respond! = |_request, context| {
 	statement = {
-		..Client.query("SELECT {message:String} AS message FORMAT JSONEachRow"),
+		..Client.query("SELECT {message:String} AS message"),
 		parameters: [Client.string_parameter("message", "Hello from Roc!")],
 	}
-	result = Client.send!(|request, limit| Http.send_with!(request, Http.default_config.with_max_response_bytes(limit)), context, statement)
+	result : Try(List({ message : Str }), _)
+	result = Client.query!(|request, limit| Http.send_with!(request, Http.default_config.with_max_response_bytes(limit)), context, statement)
 	response = match result {
-		Ok(upstream) => {
-			rows : Try(List({ message : Str }), _)
-			rows = JsonEachRow.decode(Response.body(upstream))
-			match rows {
-				Ok(values) => Response.from_status(200).with_body(Json.to_str(values).to_utf8())
-				Err(_) => Response.from_status(502).with_body("Invalid database result".to_utf8())
-			}
-		}
+		Ok(values) => Response.from_status(200).with_body(Json.to_str(values).to_utf8())
 		Err(_) => Response.from_status(503).with_body("Database unavailable".to_utf8())
 	}
 	Ok(Server.respond(response.add_header("Content-Type", "application/json")))
