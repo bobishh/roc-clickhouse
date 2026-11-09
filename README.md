@@ -1,42 +1,53 @@
 # roc-clickhouse
 
-Typed SQL over ClickHouse HTTP for Roc. Native SQL, safe named parameters,
-record-driven decoding, lazy row streams and bounded insert batches. No ORM,
-query DSL, schema generation or compile-time SQL validation.
+`roc-clickhouse` runs native ClickHouse SQL from Roc and decodes results into the
+record type you declare. Bind values with ClickHouse parameters, stream rows as
+you consume them, and insert records in bounded batches. Your Roc application
+supplies the HTTP transport and credentials.
 
-The package supplies pure protocol/codec functions and effectful orchestration.
-The application supplies HTTP, TLS and optional gzip capabilities. It depends on
-shared `roc-lang/http` types, not a particular platform.
+## Read rows into a Roc record
 
-## Compatibility
+```roc
+import ch.Client
 
-- Roc: `nightly-2026-11-04-2622062` (Zig-based compiler).
-- Native build backend: `--opt=dev`.
-- Shared HTTP dependency: `roc-lang/http` 2.0.0.
-- Buffered transport example: `basic-webserver` 0.20.0.
-- Streaming transport example: `basic-cli` 0.26.0.
-- Integration server: ClickHouse 26.8.11.7.
-- CI: Linux x86-64. Local verification: macOS ARM64 with ClickHouse in Docker.
+statement = {
+    ..Client.query("SELECT {message:String} AS message"),
+    parameters: [Client.string_parameter("message", "Hello from Roc!")],
+}
+result : Try(List({ message : Str }), _)
+result = Client.query!(send_http!, db, statement)
+```
 
-Use the pinned compiler and `--opt=dev`; other compiler/platform/backend versions
-require verification. Stream APIs require this newer toolchain. Existing
-applications should update their platform and keep the shared `http` dependency
-at 2.0.0 when upgrading from 0.0.1.
+The annotation selects the row decoder. ClickHouse checks the SQL at execution,
+and the client reports missing columns or incompatible values during decoding.
+The [complete webserver example](examples/server.roc) supplies the HTTP effect
+and database configuration.
+
+[Install](#installation) · [Query](#typed-queries) · [Stream](#streaming) ·
+[Insert](#inserts-and-batching) · [Verify a release](#release-integrity)
 
 ## Installation
 
-Use an immutable package URL from [Releases](https://github.com/bobishh/roc-clickhouse/releases)
-under `ch` in the app header, alongside your chosen platform and shared `http`
-dependency. For a checkout, use `ch: "../roc-clickhouse/package/main.roc"`.
-The release archive filename is Roc's content hash.
+Use the pinned Roc nightly from [`.roc-version`](.roc-version), `--opt=dev` and
+the shared `roc-lang/http` 2.0.0 package. Add the content-addressed URL from
+[Releases](https://github.com/bobishh/roc-clickhouse/releases) under `ch` in the
+app header alongside your platform and `http`.
 
 ```roc
 ch: "https://github.com/bobishh/roc-clickhouse/releases/download/0.1.0/B9U2fBwU1G3j4pAGW5Csphx4zfqsQgH6W3gKJvvF5wW8.tar.zst",
 ```
 
-See complete [webserver](examples/server.roc) and [streaming CLI](examples/stream.roc)
-examples. Both read credentials from application configuration; neither package
-code nor examples require a database schema lookup.
+For a local checkout, use `ch: "../roc-clickhouse/package/main.roc"`.
+The [webserver example](examples/server.roc) uses `basic-webserver` 0.20.0.
+The [streaming CLI example](examples/stream.roc) uses `basic-cli` 0.26.0.
+When upgrading from 0.0.1, update the platform to a compatible version and
+keep the shared `http` dependency at 2.0.0.
+
+To try the webserver example from this checkout, export `CLICKHOUSE_URL`,
+`CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD` for a running ClickHouse server.
+Run `roc run --opt=dev examples/server.roc` with the pinned compiler on `PATH`.
+With local port 8000 free, `curl -fsS http://127.0.0.1:8000/` returns
+`[{"message":"Hello from Roc!"}]`.
 
 ## Typed queries
 
@@ -263,7 +274,7 @@ at the application boundary. Diagnostics retained by this package are at most
 4096 bytes. See [ClickHouse HTTP behavior](https://clickhouse.com/docs/interfaces/http)
 and [cancellation](https://clickhouse.com/docs/sql-reference/statements/kill).
 
-## Development and releases
+## Development
 
 Install Node.js 22, Docker and the compiler in `.roc-version`. Linux x86-64 and
 macOS ARM64 can use the SHA-256-verified installer:
@@ -280,5 +291,44 @@ isolated fault servers; cleanup targets only their own processes/container.
 Integration compression tests also require `gzip` on PATH.
 
 Set `ROC_CLICKHOUSE_WORK_DIR` to choose a build/log location. The GitHub workflow
-runs the same checks on Linux. Dispatch with a semantic `version` to publish that
-verified immutable archive. No package operation retries automatically.
+runs the same checks on Linux x86-64. Local verification also runs on macOS ARM64
+with ClickHouse 26.8.11.7 in Docker.
+
+## Release integrity
+
+The archive filename is Roc's content hash. For `0.1.0`, the archive's SHA-256
+is `9c7ed9926ba7ba68a793c3b308fccbe5d2538112cc308ec3f2e05a7e70537cd5`.
+For new immutable GitHub releases, verify a downloaded archive against its
+release tag with `gh release verify-asset <version> <archive>`.
+
+### Publish a verified archive
+
+The [package workflow](.github/workflows/ci.yml) tests the exact bundle and
+attests it after the tests and workflow security scan pass on `main`. A
+maintainer downloads the archive, verifies its provenance and creates a GitHub
+release draft. Use a successful `main` run and an unused `X.Y.Z` version.
+
+```sh
+set -eu
+repo=bobishh/roc-clickhouse
+run_id=REPLACE_WITH_RUN_ID
+version=REPLACE_WITH_VERSION
+revision=$(gh run view "$run_id" -R "$repo" --json headBranch,conclusion,headSha \
+  --jq 'select(.headBranch == "main" and .conclusion == "success") | .headSha')
+test -n "$revision"
+existing_tag=$(git ls-remote --refs "https://github.com/$repo.git" "refs/tags/$version")
+test -z "$existing_tag"
+release_dir=$(mktemp -d)
+gh run download "$run_id" -R "$repo" -n package -D "$release_dir"
+set -- "$release_dir"/*.tar.zst
+test "$#" -eq 1
+test -f "$1"
+gh attestation verify "$1" -R "$repo" \
+  --signer-workflow "$repo/.github/workflows/ci.yml" \
+  --source-ref refs/heads/main --source-digest "$revision" --deny-self-hosted-runners
+gh release create "$version" "$1" -R "$repo" --draft --target "$revision" \
+  --title "$version" --generate-notes
+```
+
+Review the draft's source revision and archive on GitHub, then publish it from
+the Releases page. GitHub locks the tag and archive at publication.
